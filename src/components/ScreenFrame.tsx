@@ -7,12 +7,13 @@ export function ScreenFrame({ children }: { children: React.ReactNode }) {
     <View style={styles.outer}>
       <View style={styles.inner}>
         {children}
-        <Image
-          source={require('../../assets/images/waves.png')}
-          style={styles.footer}
-          resizeMode="cover"
-          pointerEvents="none"
-        />
+        <View style={styles.footer} pointerEvents="none">
+          <Image
+            source={require('../../assets/images/waves.png')}
+            style={StyleSheet.absoluteFill}
+            resizeMode="cover"
+          />
+        </View>
       </View>
     </View>
   )

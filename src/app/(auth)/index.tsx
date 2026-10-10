@@ -60,7 +60,7 @@ export default function AuthScreen() {
     }
 
     if (mode === 'login') {
-      await signIn.password({ username: u, password })
+      await signIn.create({ identifier: u, password })
       if (signIn.status === 'complete') {
         await signIn.finalize({ navigate })
       } else if (signIn.status === 'needs_client_trust') {
