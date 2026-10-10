@@ -120,39 +120,175 @@ export default function AuthScreen() {
   }
 
   const switchMode = (m: Mode) => {
-    setMode(m)
-    setLocalError(null)
-  }
+    setMode(m);
+    setStep("form");
+    setCode("");
+    setLocalError(null);
+    setNotice(null);
+  };
 
-  const submit = async () => {
-    setLocalError(null)
-    const u = username.trim().toLowerCase()
+  const clearMessages = () => {
+    setLocalError(null);
+    setNotice(null);
+  };
 
-    if (mode === 'signup' && (u.length < 3 || password.length < 8)) {
-      setLocalError('Username: 3+ characters. Password: 8+ characters.')
-      return
+  const buttonLabel = (() => {
+    if (busy) return "...";
+    if (step === "verify") return "VERIFY →";
+    return mode === "login" ? "ENTER →" : "CREATE →";
+  })();
+
+  const handleSubmit = async () => {
+    clearMessages();
+
+    // -- Verify step (both login & signup) --
+    if (step === "verify") {
+      try {
+        if (verificationPurpose === "signup") {
+          const { error } = await signUp!.verifications.verifyEmailCode({ code });
+          if (error) {
+            setLocalError(getErrorMessage(error, "Verification failed."));
+          } else if (signUp!.status === "complete") {
+            await signUp!.finalize({ navigate });
+          } else {
+            setLocalError("Verification incomplete. Please try again.");
+          }
+        } else {
+          // login email code verification
+          const { error } = await signIn!.emailCode.verifyCode({ code });
+          if (error) {
+            setLocalError(getErrorMessage(error, "Verification failed."));
+          } else if (signIn!.status === "complete") {
+            await signIn!.finalize({ navigate });
+          } else {
+            setLocalError("Verification incomplete. Please try again.");
+          }
+        }
+      } catch (err: any) {
+        setLocalError(getErrorMessage(err, "Verification failed."));
+      }
+      return;
     }
-    if (!u || !password) {
-      setLocalError('Enter your username and password.')
-      return
-    }
 
-    if (mode === 'login') {
-      await signIn.password({ username: u, password })
-      if (signIn.status === 'complete') {
-        await signIn.finalize({ navigate })
-      } else if (signIn.status === 'needs_client_trust') {
-        setLocalError('Clerk "Device Trust" is on. Turn it off in the Clerk dashboard.')
+    // -- Form step --
+    const e = email.trim().toLowerCase();
+    const u = username.trim().toLowerCase();
+
+    if (mode === "signup") {
+      if (u.length < 3 || password.length < 8) {
+        setLocalError("Username: 3+ characters. Password: 8+ characters.");
+        return;
+      }
+      if (!e) {
+        setLocalError("Email is required.");
+        return;
+      }
+
+      try {
+        const createRes = await signUp!.create({
+          username: u,
+          emailAddress: e,
+          password,
+        });
+
+        if (createRes.error) {
+          setLocalError(getErrorMessage(createRes.error, "Sign-up failed."));
+          return;
+        }
+
+        // Send verification email
+        const sendRes = await signUp!.verifications.sendEmailCode();
+        if (sendRes.error) {
+          setLocalError(getErrorMessage(sendRes.error, "Failed to send verification code."));
+          return;
+        }
+
+        setVerificationPurpose("signup");
+        setStep("verify");
+        setNotice("Check your email for a 6-digit code.");
+      } catch (err: any) {
+        setLocalError(getErrorMessage(err, "Sign-up failed."));
       }
     } else {
-      await signUp.password({ username: u, password })
-      if (signUp.status === 'complete') {
-        await signUp.finalize({ navigate })
-      } else if (signUp.status === 'missing_requirements') {
-        setLocalError('Clerk needs more info. Turn email off in User & authentication.')
+      // Login
+      if (!e || !password) {
+        setLocalError("Enter your email and password.");
+        return;
+      }
+
+      try {
+        const loginRes = await signIn!.password({
+          identifier: e,
+          password,
+        });
+
+        if (loginRes.error) {
+          setLocalError(getErrorMessage(loginRes.error, "Login failed."));
+          return;
+        }
+
+        if (signIn!.status === "complete") {
+          await signIn!.finalize({ navigate });
+        } else if (signIn!.status === "needs_first_factor") {
+          // Send verification code for email
+          const sendRes = await signIn!.emailCode.sendCode();
+          if (sendRes.error) {
+            setLocalError(getErrorMessage(sendRes.error, "Failed to send verification code."));
+            return;
+          }
+          setVerificationPurpose("login");
+          setStep("verify");
+          setNotice("Check your email for a verification code.");
+        } else if (signIn!.status === "needs_client_trust") {
+          setLocalError(
+            'Clerk "Device Trust" is on. Turn it off in the Clerk dashboard.'
+          );
+        }
+      } catch (err: any) {
+        setLocalError(getErrorMessage(err, "Login failed."));
       }
     }
-  }
+  };
+
+  const handleResend = async () => {
+    clearMessages();
+    try {
+      if (verificationPurpose === "signup") {
+        const res = await signUp!.verifications.sendEmailCode();
+        if (res.error) {
+          setLocalError(getErrorMessage(res.error, "Failed to resend code."));
+          return;
+        }
+      } else {
+        const res = await signIn!.emailCode.sendCode();
+        if (res.error) {
+          setLocalError(getErrorMessage(res.error, "Failed to resend code."));
+          return;
+        }
+      }
+      setNotice("Code resent. Check your email.");
+    } catch (err: any) {
+      setLocalError(getErrorMessage(err, "Failed to resend code."));
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setGoogleBusy(true);
+    clearMessages();
+    try {
+      const { createdSessionId, setActive } = await startSSOFlow({
+        strategy: "oauth_google",
+      });
+      if (createdSessionId && setActive) {
+        await setActive({ session: createdSessionId });
+        router.replace("/(app)");
+      }
+    } catch (err: any) {
+      setLocalError(getErrorMessage(err, "Google sign-in failed."));
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
 
   return (
     <ScreenFrame>

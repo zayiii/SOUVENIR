@@ -1,363 +1,296 @@
-// Map Screen for Souvenir Leave Phase 2
-import React, { useEffect, useState, useRef } from "react";
-import { StyleSheet, View, Text, ActivityIndicator, Pressable, Modal } from "react-native";
-import MapView, { Marker, UrlTile } from "react-native-maps";
-import * as Location from "expo-location";
-import { useAuth } from "@clerk/expo";
-import { calculateDistance, calculateBearing } from "../../lib/locationUtils";
+import { ScreenFrame } from "@/components/ScreenFrame";
 import { colors, fonts } from "@/constants/theme";
+import { useSupabase } from "@/lib/supabase";
+import { useAuth, useUser } from "@clerk/expo";
+import { useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  FlatList,
+  Image,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const PROXIMITY_THRESHOLD = 500; // meters
+type SouvenirItem = {
+  id: string;
+  creator_username: string;
+  teaser: string;
+  clue: string;
+  latitude: number;
+  longitude: number;
+  claims_count: number;
+  claim_limit: number;
+  created_at: string;
+};
 
-export default function HomeScreen() {
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  
+const DEMO_SOUVENIR: SouvenirItem = {
+  id: "demo-1",
+  creator_username: "Explorer",
+  teaser: "A quiet moment under the canopy.",
+  clue: "Under the old oak tree, where the roots break the stone.",
+  latitude: 11.2589,
+  longitude: 75.7803,
+  claims_count: 1,
+  claim_limit: 5,
+  created_at: new Date().toISOString(),
+};
+
+export default function LandingScreen() {
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const supabase = useSupabase();
   const { signOut } = useAuth();
+  const { user } = useUser();
 
-  // Phase 2 state
-  const [targetLocation, setTargetLocation] = useState<{ latitude: number, longitude: number } | null>(null);
-  const [distance, setDistance] = useState<number | null>(null);
-  const [bearing, setBearing] = useState<number | null>(null);
-  const [isCloseEnough, setIsCloseEnough] = useState(false);
-  const locationSubscription = useRef<Location.LocationSubscription | null>(null);
+  const [souvenirs, setSouvenirs] = useState<SouvenirItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
+  const loadSouvenirs = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("souvenirs")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      setSouvenirs(data ?? []);
+    } catch {
+      setSouvenirs([DEMO_SOUVENIR]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [supabase]);
+
+  // Data loading on mount — setState in async callback is the standard React pattern.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    let isMounted = true;
-    
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        if (isMounted) {
-          setErrorMsg("Location permission is required to show your position.");
-          setLoading(false);
-        }
-        return;
-      }
-      
-      try {
-        // Start continuous tracking
-        const sub = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.High,
-            timeInterval: 2000,
-            distanceInterval: 5,
-          },
-          (newLocation) => {
-            if (!isMounted) return;
-            setLocation(newLocation);
-            
-            // Initialize target location based on first ping if not set (offset by ~700m for testing)
-            setTargetLocation((prevTarget) => {
-              const currentTarget = prevTarget || {
-                latitude: newLocation.coords.latitude + 0.005,
-                longitude: newLocation.coords.longitude + 0.005,
-              };
-              
-              // Calculate distance and bearing
-              const dist = calculateDistance(
-                newLocation.coords.latitude,
-                newLocation.coords.longitude,
-                currentTarget.latitude,
-                currentTarget.longitude
-              );
-              
-              const bear = calculateBearing(
-                newLocation.coords.latitude,
-                newLocation.coords.longitude,
-                currentTarget.latitude,
-                currentTarget.longitude
-              );
-              
-              setDistance(dist);
-              setBearing(bear);
-              
-              if (dist <= PROXIMITY_THRESHOLD) {
-                setIsCloseEnough(true);
-                // Stop tracking once target is reached
-                if (locationSubscription.current) {
-                  locationSubscription.current.remove();
-                  locationSubscription.current = null;
-                }
-              }
-              
-              return currentTarget;
-            });
-            
-            if (loading) setLoading(false);
-          }
-        );
-        locationSubscription.current = sub;
-      } catch (e) {
-        if (isMounted) {
-          setErrorMsg("Failed to obtain location.");
-          setLoading(false);
-        }
-      }
-    })();
-    
-    return () => {
-      isMounted = false;
-      if (locationSubscription.current) {
-        locationSubscription.current.remove();
-      }
-    };
-  }, []);
+    void loadSouvenirs();
+  }, [loadSouvenirs]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#208AEF" />
-        <Text style={styles.loadingText}>Getting your location...</Text>
-      </View>
-    );
-  }
-
-  if (errorMsg) {
-    return (
-      <View style={styles.errorContainer}>
-        <Text style={styles.errorText}>{errorMsg}</Text>
-      </View>
-    );
-  }
+  const onRefresh = () => {
+    setRefreshing(true);
+    void loadSouvenirs();
+  };
 
   return (
-    <View style={styles.container}>
-      <MapView
-        style={styles.map}
-        showsUserLocation={true}
-        initialRegion={{
-          latitude: location!.coords.latitude,
-          longitude: location!.coords.longitude,
-          latitudeDelta: 0.015,
-          longitudeDelta: 0.015,
-        }}
-      >
-        <UrlTile
-          urlTemplate="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maximumZ={19}
-          flipY={false}
+    <ScreenFrame>
+      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
+        <Image
+          source={require("../../../assets/images/logo.png")}
+          style={styles.logo}
+          resizeMode="contain"
         />
-        {targetLocation && (
-          <Marker
-            coordinate={targetLocation}
-            title="Target Souvenir"
-            description="Find this location!"
+        <Pressable
+          onPress={() => void signOut()}
+          style={styles.signOutBtn}
+          hitSlop={8}
+        >
+          <Text style={styles.signOutText}>SIGN OUT</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.container}>
+        <View style={styles.heroSection}>
+          <Text style={styles.greeting}>WELCOME, @{user?.username ?? "EXPLORER"}</Text>
+          <Text style={styles.subhead}>
+            Choose a souvenir below to navigate to its real-world location &amp; collect it, or leave your own!
+          </Text>
+        </View>
+
+        <View style={styles.actionsRow}>
+          <Pressable
+            onPress={() => router.push("/(app)/souvenir/add")}
+            style={styles.actionBtnPrimary}
+          >
+            <Text style={styles.actionBtnPrimaryText}>+ LEAVE SOUVENIR</Text>
+          </Pressable>
+        </View>
+
+        <Text style={styles.sectionTitle}>AVAILABLE SOUVENIRS</Text>
+
+        {loading ? (
+          <View style={styles.centerLoader}>
+            <ActivityIndicator size="small" color={colors.ink} />
+          </View>
+        ) : (
+          <FlatList
+            data={souvenirs}
+            keyExtractor={(item) => item.id}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
+            contentContainerStyle={styles.listContent}
+            renderItem={({ item }) => (
+              <Pressable
+                onPress={() =>
+                  router.push({
+                    pathname: "/(app)/map",
+                    params: {
+                      id: item.id,
+                      teaser: item.teaser,
+                      clue: item.clue,
+                      latitude: item.latitude,
+                      longitude: item.longitude,
+                    },
+                  })
+                }
+                style={styles.card}
+              >
+                <View style={styles.cardHeader}>
+                  <Text style={styles.creator}>LEFT BY @{item.creator_username.toUpperCase()}</Text>
+                  <Text style={styles.claims}>
+                    {item.claims_count}/{item.claim_limit} CLAIMED
+                  </Text>
+                </View>
+                <Text style={styles.teaser}>{item.teaser}</Text>
+                <Text style={styles.cluePreview} numberOfLines={2}>
+                  Clue: &quot;{item.clue}&quot;
+                </Text>
+                <Text style={styles.collectLink}>COLLECT SOUVENIR →</Text>
+              </Pressable>
+            )}
           />
         )}
-      </MapView>
-
-      {/* Navigation Overlay */}
-      {!isCloseEnough && distance !== null && bearing !== null && (
-        <View style={styles.navigationOverlay}>
-          <Text style={styles.distanceText}>
-            {distance > 1000 ? `${(distance / 1000).toFixed(1)} km` : `${Math.round(distance)} m`}
-          </Text>
-          <View style={[styles.arrowContainer, { transform: [{ rotate: `${bearing}deg` }] }]}>
-            <Text style={styles.arrow}>↑</Text>
-          </View>
-          <Text style={styles.navSubtext}>Walk towards the target</Text>
-        </View>
-      )}
-
-      {/* Clue Reveal Modal */}
-      <Modal
-        visible={isCloseEnough}
-        animationType="slide"
-        transparent={true}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>You've arrived!</Text>
-            <Text style={styles.modalBody}>
-              Look around for the physical object matching the creator's reference.
-            </Text>
-            <View style={styles.clueBox}>
-              <Text style={styles.clueText}>Clue: "Under the old oak tree, where the roots break the stone."</Text>
-            </View>
-            {/* Phase 3 placeholder */}
-            <Pressable style={styles.actionButton} onPress={() => console.log('Camera would open here')}>
-              <Text style={styles.actionButtonText}>Verify Object (Phase 3)</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
-
-      <View style={styles.attribution}>
-        <Text style={styles.attributionText}>© OpenStreetMap contributors</Text>
       </View>
-      
-      {/* Temporary Sign Out Button */}
-      <Pressable style={styles.signOutButton} onPress={() => signOut()}>
-        <Text style={styles.signOutText}>Sign Out</Text>
-      </Pressable>
-    </View>
+    </ScreenFrame>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  map: {
-    ...StyleSheet.absoluteFill,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: "#f0f4f8",
+    paddingHorizontal: 16,
+    paddingBottom: 12,
   },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 16,
-    fontFamily: fonts?.body,
-    color: "#333",
+  logo: {
+    width: 62,
+    height: 46,
   },
-  errorContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 20,
-    backgroundColor: "#fff5f5",
-  },
-  errorText: {
-    color: "#b00020",
-    fontSize: 16,
-    fontFamily: fonts?.body,
-    textAlign: "center",
-  },
-  attribution: {
-    position: "absolute",
-    bottom: 4,
-    right: 4,
-    backgroundColor: "rgba(255,255,255,0.7)",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  attributionText: {
-    fontSize: 10,
-    color: "#555",
-  },
-  signOutButton: {
-    position: "absolute",
-    top: 40,
-    right: 16,
-    backgroundColor: "rgba(255,255,255,0.9)",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+  signOutBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: colors.ink,
   },
   signOutText: {
-    color: "#b00020",
-    fontWeight: "bold",
-    fontSize: 12,
+    fontFamily: fonts.body,
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+    color: colors.ink,
   },
-  navigationOverlay: {
-    position: "absolute",
-    top: 60,
-    alignSelf: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
-    padding: 16,
-    borderRadius: 16,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 5,
-    minWidth: 180,
-  },
-  distanceText: {
-    fontSize: 28,
-    fontWeight: "bold",
-    color: colors?.ink || "#333",
-    fontFamily: fonts?.body,
-  },
-  arrowContainer: {
-    marginVertical: 12,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: colors?.box || "#E6F4FE",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: "#208AEF",
-  },
-  arrow: {
-    fontSize: 32,
-    color: "#208AEF",
-    fontWeight: "bold",
-  },
-  navSubtext: {
-    fontSize: 14,
-    color: "#666",
-    fontFamily: fonts?.body,
-  },
-  modalOverlay: {
+  container: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "flex-end",
+    paddingHorizontal: 16,
   },
-  modalContent: {
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
-    minHeight: 300,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 10,
-  },
-  modalTitle: {
-    fontSize: 24,
-    fontWeight: "bold",
-    marginBottom: 12,
-    color: colors?.ink || "#111",
-    fontFamily: fonts?.body,
-  },
-  modalBody: {
-    fontSize: 16,
-    lineHeight: 24,
-    color: "#444",
+  heroSection: {
+    marginTop: 12,
     marginBottom: 20,
-    fontFamily: fonts?.body,
   },
-  clueBox: {
-    backgroundColor: colors?.box || "#f5f5f5",
-    padding: 16,
-    borderRadius: 12,
+  greeting: {
+    fontFamily: fonts.body,
+    fontSize: 18,
+    fontWeight: "700",
+    letterSpacing: 2,
+    color: colors.ink,
+    marginBottom: 6,
+  },
+  subhead: {
+    fontFamily: fonts.body,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.quote,
+  },
+  actionsRow: {
     marginBottom: 24,
-    borderLeftWidth: 4,
-    borderLeftColor: "#208AEF",
   },
-  clueText: {
-    fontSize: 16,
-    fontStyle: "italic",
-    color: colors?.ink || "#333",
-    fontFamily: fonts?.body,
-  },
-  actionButton: {
-    backgroundColor: "#208AEF",
-    paddingVertical: 16,
-    borderRadius: 12,
+  actionBtnPrimary: {
+    backgroundColor: colors.box,
+    borderWidth: 2,
+    borderColor: colors.ink,
+    paddingVertical: 14,
     alignItems: "center",
   },
-  actionButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "bold",
+  actionBtnPrimaryText: {
+    fontFamily: fonts.body,
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 2,
+    color: colors.ink,
+  },
+  sectionTitle: {
+    fontFamily: fonts.body,
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 2,
+    color: colors.ink,
+    marginBottom: 12,
+  },
+  centerLoader: {
+    paddingVertical: 40,
+    alignItems: "center",
+  },
+  listContent: {
+    paddingBottom: 40,
+    gap: 16,
+  },
+  card: {
+    backgroundColor: colors.white,
+    borderWidth: 2,
+    borderColor: colors.ink,
+    padding: 16,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  creator: {
+    fontFamily: fonts.body,
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+    color: colors.quote,
+  },
+  claims: {
+    fontFamily: fonts.body,
+    fontSize: 11,
+    fontWeight: "700",
     letterSpacing: 1,
-    fontFamily: fonts?.body,
+    color: colors.quote,
+  },
+  teaser: {
+    fontFamily: fonts.body,
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: 1,
+    color: colors.ink,
+    marginBottom: 6,
+  },
+  cluePreview: {
+    fontFamily: fonts.body,
+    fontSize: 12,
+    fontStyle: "italic",
+    color: colors.quote,
+    marginBottom: 14,
+  },
+  collectLink: {
+    fontFamily: fonts.body,
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+    color: colors.ink,
+    alignSelf: "flex-end",
   },
 });

@@ -18,7 +18,7 @@ export default function Splash() {
 
   useEffect(() => {
     if (isLoaded && timeUp) router.replace(isSignedIn ? '/(app)' : '/(auth)')
-  }, [isLoaded, timeUp, isSignedIn])
+  }, [isLoaded, timeUp, isSignedIn, router])
 
   return (
     <View style={styles.container}>
