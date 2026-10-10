@@ -21,17 +21,39 @@ async function uploadFileToSupabase(
   uri: string,
   contentType: string
 ) {
+  const cleanPath = path.replace(/[^a-zA-Z0-9_.-]/g, '_')
   const response = await fetch(uri)
   const blob = await response.blob()
 
-  const { error } = await supabase.storage.from(bucket).upload(path, blob, {
+  const reader = new FileReader()
+  const base64Promise = new Promise<string>((resolve, reject) => {
+    reader.onloadend = () => {
+      const res = reader.result as string
+      const base64 = res.split(',')[1] ?? res
+      resolve(base64)
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+
+  const base64 = await base64Promise
+  const binaryString = atob(base64)
+  const bytes = new Uint8Array(binaryString.length)
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i)
+  }
+
+  const { error } = await supabase.storage.from(bucket).upload(cleanPath, bytes, {
     contentType,
     upsert: true,
   })
 
-  if (error) throw error
+  if (error) {
+    console.error(`Supabase storage upload error [bucket=${bucket}, path=${cleanPath}]:`, error)
+    throw error
+  }
 
-  const { data } = supabase.storage.from(bucket).getPublicUrl(path)
+  const { data } = supabase.storage.from(bucket).getPublicUrl(cleanPath)
   return data.publicUrl
 }
 
@@ -50,10 +72,10 @@ export async function submitSouvenir(
 
   // 2. Upload object photo
   const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '_')
-  const objectPath = `objects/${safeUserId}_${Date.now()}.jpg`
+  const objectPath = `${safeUserId}_${Date.now()}.jpg`
   const objectImageUrl = await uploadFileToSupabase(
     supabase,
-    'souvenirs',
+    'object-photos',
     objectPath,
     params.objectImageUri,
     'image/jpeg'
@@ -65,10 +87,10 @@ export async function submitSouvenir(
   if (params.gift.kind === 'image' || params.gift.kind === 'file') {
     const rawExt = params.gift.name.split('.').pop() ?? 'bin'
     const safeExt = rawExt.replace(/[^a-zA-Z0-9]/g, '') || 'bin'
-    const giftPath = `gifts/${safeUserId}_${Date.now()}.${safeExt}`
+    const giftPath = `gifts_${safeUserId}_${Date.now()}.${safeExt}`
     const uploadedGiftUrl = await uploadFileToSupabase(
       supabase,
-      'souvenirs',
+      'souvenir-art',
       giftPath,
       params.gift.uri,
       params.gift.mimeType ?? 'application/octet-stream'
